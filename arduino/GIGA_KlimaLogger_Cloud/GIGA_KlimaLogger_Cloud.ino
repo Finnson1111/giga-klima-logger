@@ -10,8 +10,8 @@
 // =========================
 // WLAN / Cloud API
 // =========================
-const char WIFI_SSID[]     = "Muehlweg3";
-const char WIFI_PASSWORD[] = "oisklOr11.";
+const char WIFI_SSID[]     = "dein wlan name";
+const char WIFI_PASSWORD[] = "dein wlan passwort";
 
 // Beispiel: "logger.example.de" – OHNE https:// und OHNE /api/...
 const char API_HOST[] = "DEINE-DOMAIN.DE";
