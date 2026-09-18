@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GIGA Klima Logger</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f172a;
+      --card: #111827;
+      --line: #263247;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1 { margin-top: 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px;
+    }
+    .value {
+      font-size: 2.4rem;
+      font-weight: 700;
+      margin-top: 6px;
+    }
+    .muted { color: var(--muted); }
+    canvas {
+      width: 100%;
+      height: 300px;
+      display: block;
+      background: #0b1220;
+      border-radius: 12px;
+    }
+    button, a.button {
+      display: inline-block;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: var(--accent);
+      color: #001018;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    th, td {
+      padding: 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+    @media (max-width: 700px) {
+      .grid { grid-template-columns: 1fr; }
+      main { padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>GIGA Klima Logger</h1>
+  <p class="muted">Livewerte und Messhistorie</p>
+
+  <section class="grid">
+    <div class="card">
+      <div class="muted">Temperatur</div>
+      <div id="temp" class="value">–</div>
+    </div>
+    <div class="card">
+      <div class="muted">Luftfeuchtigkeit</div>
+      <div id="hum" class="value">–</div>
+    </div>
+  </section>
+
+  <div class="card" style="margin-top:16px">
+    <div class="muted">Letzte Messung</div>
+    <div id="time" style="margin-top:6px">–</div>
+    <p id="status" class="muted">Lade Daten …</p>
+    <a class="button" href="/api/history.csv">CSV herunterladen</a>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>Temperatur</h2>
+    <canvas id="tempChart" width="1000" height="300"></canvas>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>Luftfeuchtigkeit</h2>
+    <canvas id="humChart" width="1000" height="300"></canvas>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>Letzte Messungen</h2>
+    <div style="overflow:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Zeit</th>
+            <th>Temperatur</th>
+            <th>Feuchte</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function formatTime(m) {
+  return new Date(m.timestamp * 1000).toLocaleString("de-DE");
+}
+
+function drawChart(canvas, data, key, unit) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  if (!data.length) {
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillText("Noch keine Daten", 20, 30);
+    return;
+  }
+
+  const values = data.map(x => Number(x[key]));
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (min === max) { min -= 1; max += 1; }
+
+  const pad = 35;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2;
+
+  ctx.strokeStyle = "#263247";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad + innerH * i / 4;
+    ctx.beginPath();
+    ctx.moveTo(pad, y);
+    ctx.lineTo(w - pad, y);
+    ctx.stroke();
+
+    const label = (max - (max - min) * i / 4).toFixed(1) + " " + unit;
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "12px system-ui";
+    ctx.fillText(label, 4, y + 4);
+  }
+
+  ctx.strokeStyle = "#38bdf8";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+
+  values.forEach((v, i) => {
+    const x = pad + innerW * (values.length === 1 ? 0 : i / (values.length - 1));
+    const y = pad + innerH * (1 - (v - min) / (max - min));
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+
+  ctx.stroke();
+}
+
+async function loadData() {
+  try {
+    const [latestRes, historyRes] = await Promise.all([
+      fetch("/api/latest", { cache: "no-store" }),
+      fetch("/api/history?limit=500", { cache: "no-store" })
+    ]);
+
+    if (!latestRes.ok || !historyRes.ok) throw new Error("API-Fehler");
+
+    const latest = await latestRes.json();
+    const history = await historyRes.json();
+
+    if (latest) {
+      $("temp").textContent = Number(latest.temperature).toFixed(1) + " °C";
+      $("hum").textContent = Number(latest.humidity).toFixed(1) + " %";
+      $("time").textContent = formatTime(latest);
+      $("status").textContent = "Online · " + history.length + " Messungen geladen";
+    } else {
+      $("status").textContent = "Noch keine Messung vorhanden.";
+    }
+
+    drawChart($("tempChart"), history, "temperature", "°C");
+    drawChart($("humChart"), history, "humidity", "%");
+
+    $("rows").innerHTML = history.slice(-20).reverse().map(m => `
+      <tr>
+        <td>${formatTime(m)}</td>
+        <td>${Number(m.temperature).toFixed(1)} °C</td>
+        <td>${Number(m.humidity).toFixed(1)} %</td>
+      </tr>
+    `).join("");
+  } catch (err) {
+    $("status").textContent = "Keine Verbindung zur Daten-API.";
+  }
+}
+
+loadData();
+setInterval(loadData, 10000);
+</script>
+</body>
+</html>
